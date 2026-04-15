@@ -27,27 +27,44 @@ import torch
 
 log = logging.getLogger("inemaimg.shims")
 
-_INT_DTYPES = {torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8}
+_SMALL_ROUTE_THRESHOLD = 1024  # tensors smaller than this go CPU-route as well
 
 
-def _patch_int_reductions() -> None:
-    """Route int-CUDA prod/cumprod through CPU to dodge the nvrtc JIT path."""
+def _patch_reductions() -> None:
+    """Route small/int CUDA prod/cumprod through CPU to dodge the nvrtc JIT path.
+
+    We route unconditionally for integer CUDA tensors (hits the exact known
+    failure: Qwen2.5-VL's image_grid_thw.prod(-1)), and also for *small* float
+    CUDA tensors — the scheduler's alpha cumprod is only a few thousand
+    elements and we've seen inference hang inside its cumprod path on sm_120.
+    Large float reductions (activations, etc.) stay on the GPU because
+    they're precompiled and bouncing them to CPU would be catastrophic.
+    """
     _orig_prod = torch.Tensor.prod
     _orig_cumprod = torch.Tensor.cumprod
 
+    def _should_route(t: torch.Tensor) -> bool:
+        if not t.is_cuda:
+            return False
+        if not t.is_floating_point():
+            return True  # always route int/bool — they're metadata, always tiny
+        return t.numel() <= _SMALL_ROUTE_THRESHOLD
+
     def _safe_prod(self, *args, **kwargs):
-        if self.is_cuda and self.dtype in _INT_DTYPES:
+        if _should_route(self):
             return _orig_prod(self.cpu(), *args, **kwargs).to(self.device)
         return _orig_prod(self, *args, **kwargs)
 
     def _safe_cumprod(self, *args, **kwargs):
-        if self.is_cuda and self.dtype in _INT_DTYPES:
+        if _should_route(self):
             return _orig_cumprod(self.cpu(), *args, **kwargs).to(self.device)
         return _orig_cumprod(self, *args, **kwargs)
 
     torch.Tensor.prod = _safe_prod  # type: ignore[method-assign]
     torch.Tensor.cumprod = _safe_cumprod  # type: ignore[method-assign]
-    log.info("applied Blackwell nvrtc shim: int-CUDA prod/cumprod → CPU")
+    log.info(
+        "applied Blackwell nvrtc shim: int-CUDA + small-float-CUDA prod/cumprod → CPU"
+    )
 
 
-_patch_int_reductions()
+_patch_reductions()

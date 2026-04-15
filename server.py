@@ -207,8 +207,9 @@ async def load_model(req: LoadRequest):
     if req.model not in REGISTRY:
         raise HTTPException(status_code=404, detail=f"unknown model: {req.model}")
     assert state.lock is not None
+    loop = asyncio.get_running_loop()
     async with state.lock:
-        _load(req.model)
+        await loop.run_in_executor(None, _load, req.model)
     return {"loaded": state.loaded_id, "gpu_memory_allocated_gb": _gpu_mem_gb()}
 
 
@@ -220,12 +221,20 @@ async def generate(req: GenerateRequest):
     pil_images = [_decode_image(b) for b in (req.images or [])]
 
     assert state.lock is not None
+    loop = asyncio.get_running_loop()
     async with state.lock:
-        _load(req.model)
+        # Load can be fast (already loaded) or very slow (swap). Either way,
+        # run it off the event loop so /health stays responsive.
+        await loop.run_in_executor(None, _load, req.model)
         loader_cls = REGISTRY[req.model]
         t0 = time.perf_counter()
         try:
-            image = loader_cls.generate(state.pipe, req, pil_images)
+            # CRITICAL: pipe() is synchronous and holds the GIL — running it
+            # on the event loop thread would starve /health and every other
+            # async handler for the entire generation. Executor it.
+            image = await loop.run_in_executor(
+                None, loader_cls.generate, state.pipe, req, pil_images
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
