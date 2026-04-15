@@ -1,7 +1,10 @@
 # NVIDIA NGC PyTorch container — arm64-sbsa build with Blackwell / GB10 support.
-# The 25.03 tag ships PyTorch 2.7 + CUDA 12.8 + cuDNN 9 and officially supports
-# compute capability sm_120 (Blackwell consumer + GB10).
-FROM nvcr.io/nvidia/pytorch:25.03-py3
+# Bumped from 25.03 → 26.03 to pick up proper sm_120 kernels for SDPA and
+# attention paths. On 25.03 we saw edit generations take ~290s for 4 steps
+# because several ops fell back to reference implementations on sm_120.
+# Keep the Blackwell nvrtc shim in loaders/_blackwell_shims.py until this
+# image is proven to not need it.
+FROM nvcr.io/nvidia/pytorch:26.03-py3
 
 WORKDIR /app
 

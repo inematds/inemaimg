@@ -32,6 +32,9 @@ from pydantic import BaseModel, Field  # noqa: E402
 
 # Must be imported before any loader so the torch monkey-patch lands first.
 from loaders import _blackwell_shims  # noqa: F401, E402 — side-effect import
+from loaders.ernie import ErnieLoader  # noqa: E402
+from loaders.flux2_dev import Flux2DevLoader  # noqa: E402
+from loaders.flux2_klein import Flux2KleinLoader  # noqa: E402
 from loaders.qwen_edit import QwenEditLoader  # noqa: E402
 
 
@@ -40,8 +43,14 @@ from loaders.qwen_edit import QwenEditLoader  # noqa: E402
 # --------------------------------------------------------------------------- #
 
 # Internal id -> loader class. Add new models here as they come online.
+# NOTE: flux2-klein and flux2-dev are FLUX Non-Commercial — keep them
+# registered for testing, but gate them behind a commercial flag before
+# exposing to a paying-customer product.
 REGISTRY: dict[str, type] = {
     "qwen-edit-2511": QwenEditLoader,
+    "ernie": ErnieLoader,
+    "flux2-klein": Flux2KleinLoader,
+    "flux2-dev": Flux2DevLoader,
 }
 
 

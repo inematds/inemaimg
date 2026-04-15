@@ -283,7 +283,12 @@ A arquitetura multi-modelo facilita essa política: os modelos não-comerciais p
 - [x] `Dockerfile` + `docker-compose.yml` (MVP)
 - [x] `server.py` com registry + lock serializado por GPU
 - [x] Loader `qwen-edit-2511` (motor principal comercial)
-- [ ] Build do container + download do modelo (~40 GB)
+- [x] Loaders `ernie`, `flux2-klein`, `flux2-dev` (não testados end-to-end ainda)
+- [x] Build do container + download do modelo Qwen-Edit-2511
+- [x] Playground web em `/` (HTML estático)
+- [x] Shim Blackwell/sm_120 pra `nvrtc` (`loaders/_blackwell_shims.py`)
+- [x] `pipe()` rodando em `run_in_executor` (não trava event loop)
+- [ ] Validar base image bump (25.03 → 26.03) resolveu perf de ~290s/4-step
 - [ ] Integração com timesmkt3
 - [ ] Teste de carga inicial
-- [ ] Adicionar loaders restantes (`ernie`, `flux2-klein`, `flux2-dev`)
+- [ ] Autenticação (reverter bind `0.0.0.0` temporário)
