@@ -21,10 +21,11 @@ services:
       # Optional: outputs directory for debug dumps
       - ./outputs:/app/outputs
 
-    # Bound to localhost only — timesmkt3 consumes locally. Change to
-    # "0.0.0.0:8000:8000" (plus auth) to expose on the LAN.
+    # TEMPORARY: exposed on the LAN (0.0.0.0) for cross-machine testing.
+    # There is NO auth on /generate yet — revert to 127.0.0.1:8000:8000 or
+    # add an API key check before leaving this running unattended.
     ports:
-      - "127.0.0.1:8000:8000"
+      - "0.0.0.0:8000:8000"
 
     # Pipelines use large shared-memory tensors for dataloader workers.
     shm_size: "8g"

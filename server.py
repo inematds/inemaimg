@@ -19,16 +19,20 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any
 
-import torch
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from PIL import Image
-from pydantic import BaseModel, Field
-
-from loaders.qwen_edit import QwenEditLoader
-
-log = logging.getLogger("inemaimg")
+# Configure logging before any loader import so side-effect log lines
+# (e.g. the Blackwell shim notice) are visible.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("inemaimg")
+
+import torch  # noqa: E402
+from fastapi import FastAPI, HTTPException  # noqa: E402
+from fastapi.responses import FileResponse  # noqa: E402
+from PIL import Image  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
+
+# Must be imported before any loader so the torch monkey-patch lands first.
+from loaders import _blackwell_shims  # noqa: F401, E402 — side-effect import
+from loaders.qwen_edit import QwenEditLoader  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
