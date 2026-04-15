@@ -35,4 +35,4 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 600s  # first boot downloads the model
+      start_period: 60s   # /health responds instantly now that prewarm is async

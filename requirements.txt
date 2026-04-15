@@ -4,6 +4,9 @@ pydantic>=2
 pillow
 python-multipart
 accelerate>=0.30
+# NGC PyTorch 25.03-py3 does NOT ship transformers by default; Qwen edit
+# pipelines pull it in as a hard dependency.
+transformers>=4.45
 safetensors
 sentencepiece
 # diffusers is installed from git in the Dockerfile to pick up

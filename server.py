@@ -44,6 +44,9 @@ class _State:
     loaded_id: str | None = None
     pipe: Any | None = None
     lock: asyncio.Lock | None = None
+    # Prewarm status, used by /health so orchestrators can tell "booting" from "stuck".
+    prewarm_status: str = "idle"  # idle | running | ready | failed
+    prewarm_error: str | None = None
 
 
 state = _State()
@@ -73,20 +76,38 @@ def _unload() -> None:
         torch.cuda.empty_cache()
 
 
+async def _run_prewarm(model_id: str) -> None:
+    """Load a model off the event loop so /health stays responsive during boot."""
+    loop = asyncio.get_running_loop()
+    assert state.lock is not None
+    async with state.lock:
+        state.prewarm_status = "running"
+        state.prewarm_error = None
+        try:
+            await loop.run_in_executor(None, _load, model_id)
+            state.prewarm_status = "ready"
+        except Exception as e:  # pragma: no cover — diagnostic path
+            log.exception("prewarm of %s failed: %s", model_id, e)
+            state.prewarm_status = "failed"
+            state.prewarm_error = f"{type(e).__name__}: {e}"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state.lock = asyncio.Lock()
     prewarm = os.environ.get("INEMAIMG_PREWARM", "").strip()
+    prewarm_task: asyncio.Task | None = None
     if prewarm:
         if prewarm not in REGISTRY:
             log.warning("INEMAIMG_PREWARM=%s not in registry, skipping prewarm", prewarm)
         else:
-            async with state.lock:
-                try:
-                    _load(prewarm)
-                except Exception as e:
-                    log.exception("prewarm of %s failed: %s", prewarm, e)
+            # Fire-and-forget: lifespan yields immediately so /health is live
+            # while the download + GPU copy happen in the background. Callers
+            # can poll /health for prewarm_status until it's "ready".
+            prewarm_task = asyncio.create_task(_run_prewarm(prewarm))
     yield
+    if prewarm_task is not None and not prewarm_task.done():
+        prewarm_task.cancel()
     _unload()
 
 
@@ -151,6 +172,8 @@ def health():
     return {
         "status": "ok",
         "loaded_model": state.loaded_id,
+        "prewarm_status": state.prewarm_status,
+        "prewarm_error": state.prewarm_error,
         "gpu_memory_allocated_gb": _gpu_mem_gb(),
         "cuda_available": torch.cuda.is_available(),
     }
