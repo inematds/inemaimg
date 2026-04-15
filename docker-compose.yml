@@ -1,0 +1,38 @@
+services:
+  inemaimg:
+    build: .
+    image: inemaimg:latest
+    container_name: inemaimg
+    restart: unless-stopped
+
+    # GB10 (DGX Spark) — nvidia runtime via NVIDIA Container Toolkit / CDI
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/root/.cache/huggingface
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+      # The model pre-warmed on container start. Empty = no prewarm.
+      - INEMAIMG_PREWARM=qwen-edit-2511
+
+    volumes:
+      # Persist HuggingFace cache so we don't re-download ~40GB every rebuild.
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      # Optional: outputs directory for debug dumps
+      - ./outputs:/app/outputs
+
+    # Bound to localhost only — timesmkt3 consumes locally. Change to
+    # "0.0.0.0:8000:8000" (plus auth) to expose on the LAN.
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    # Pipelines use large shared-memory tensors for dataloader workers.
+    shm_size: "8g"
+
+    # Healthcheck hits /health — fast, doesn't load the model.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 600s  # first boot downloads the model

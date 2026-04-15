@@ -1,0 +1,11 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2
+pillow
+python-multipart
+accelerate>=0.30
+safetensors
+sentencepiece
+# diffusers is installed from git in the Dockerfile to pick up
+# pipelines that aren't in the pip release yet
+#   (QwenImageEditPlusPipeline, Flux2KleinPipeline, Flux2Pipeline, ErnieImagePipeline)
