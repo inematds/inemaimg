@@ -232,10 +232,28 @@ async def generate(req: GenerateRequest):
     assert state.lock is not None
     loop = asyncio.get_running_loop()
     async with state.lock:
-        # Load can be fast (already loaded) or very slow (swap). Either way,
-        # run it off the event loop so /health stays responsive.
-        await loop.run_in_executor(None, _load, req.model)
         loader_cls = REGISTRY[req.model]
+        try:
+            # Load can be fast (already loaded) or very slow (swap). Either
+            # way, run it off the event loop so /health stays responsive.
+            # Inside the try so gated-repo / download errors surface as
+            # structured JSON instead of leaking as raw HTML 500s.
+            await loop.run_in_executor(None, _load, req.model)
+        except Exception as e:
+            log.exception("model load failed")
+            msg = str(e)
+            # GatedRepoError and friends have long messages — trim for the UI.
+            if "GatedRepoError" in type(e).__name__ or "gated repo" in msg.lower():
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"model {req.model} is gated on HuggingFace. Request "
+                        "access on the model page and set HF_TOKEN in the "
+                        "container env, then /models/load to retry."
+                    ),
+                )
+            raise HTTPException(status_code=500, detail=f"load failed: {type(e).__name__}: {msg[:300]}")
+
         t0 = time.perf_counter()
         try:
             # CRITICAL: pipe() is synchronous and holds the GIL — running it
@@ -248,7 +266,7 @@ async def generate(req: GenerateRequest):
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             log.exception("generation failed")
-            raise HTTPException(status_code=500, detail=f"generation failed: {e}")
+            raise HTTPException(status_code=500, detail=f"generation failed: {type(e).__name__}: {str(e)[:300]}")
         dt = time.perf_counter() - t0
 
     return {

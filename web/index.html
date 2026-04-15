@@ -83,10 +83,43 @@
   .spinner { width: 28px; height: 28px; border: 3px solid var(--border);
     border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .busy { display: flex; flex-direction: column; align-items: center; gap: 14px; color: var(--muted); }
+  .busy .elapsed { font-variant-numeric: tabular-nums; font-size: 26px; font-weight: 500;
+    color: var(--text); letter-spacing: 1px; }
+  .busy .elapsed-hint { font-size: 11px; color: var(--muted); }
 
   .hint { font-size: 11px; color: var(--muted); margin-top: 6px; }
   .err-box { border: 1px solid #5b2b2b; background: #2a1515; color: #ffb4b4;
     padding: 10px 12px; border-radius: 10px; font-size: 12px; white-space: pre-wrap; }
+
+  /* History */
+  .history-head { display: flex; align-items: center; justify-content: space-between;
+    margin: 24px 0 10px; }
+  .history-head h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--muted); margin: 0; font-weight: 600; }
+  .history-head button { background: transparent; border: 1px solid var(--border);
+    color: var(--muted); border-radius: 8px; padding: 6px 10px; font-size: 11px;
+    cursor: pointer; }
+  .history-head button:hover { color: var(--text); border-color: var(--accent); }
+  .history { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 12px; }
+  .hist-item { background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden; cursor: pointer; transition: .15s;
+    display: flex; flex-direction: column; position: relative; }
+  .hist-item:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .hist-item .thumb-img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block;
+    background: var(--panel-2); }
+  .hist-item .info { padding: 8px 10px 10px; }
+  .hist-item .prompt { font-size: 12px; color: var(--text); display: -webkit-box;
+    -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    line-height: 1.35; min-height: 32px; }
+  .hist-item .sub { font-size: 10px; color: var(--muted); margin-top: 4px;
+    display: flex; justify-content: space-between; gap: 4px; }
+  .hist-item .del { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px;
+    background: rgba(0,0,0,.65); border: 0; color: #fff; border-radius: 50%;
+    font-size: 12px; line-height: 1; cursor: pointer; opacity: 0; transition: .15s; padding: 0; }
+  .hist-item:hover .del { opacity: 1; }
+  .history-empty { color: var(--muted); font-size: 12px; padding: 20px 0; text-align: center; }
 </style>
 </head>
 <body>
@@ -152,11 +185,151 @@
       </div>
     </div>
   </div>
+
+  <div class="history-head">
+    <h2>Histórico</h2>
+    <button id="clear-history" title="apagar histórico">limpar</button>
+  </div>
+  <div id="history" class="history"></div>
 </div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const state = { images: [] }; // {name, b64, dataUrl}
+
+// History: thumbs + metadata persisted in localStorage; full-res images
+// only kept for the current session so we don't blow the 5MB quota.
+const HISTORY_KEY = "inemaimg_history_v1";
+const HISTORY_MAX = 40;
+const fullCache = new Map(); // id -> full dataUrl (session only)
+
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); }
+  catch { return []; }
+}
+function saveHistory(h) {
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(h)); }
+  catch (e) {
+    // quota exceeded — drop oldest half and retry once
+    const trimmed = h.slice(0, Math.floor(h.length / 2));
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(trimmed)); } catch {}
+  }
+}
+
+// Downscale a PNG dataUrl to a small JPEG thumb for localStorage.
+async function makeThumb(fullDataUrl, size = 256, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(size / img.width, size / img.height, 1);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = reject;
+    img.src = fullDataUrl;
+  });
+}
+
+function renderHistory() {
+  const h = loadHistory();
+  const wrap = $("history");
+  if (!h.length) {
+    wrap.innerHTML = '<div class="history-empty">nenhuma geração ainda — faça uma pra começar o histórico</div>';
+    return;
+  }
+  wrap.innerHTML = "";
+  h.forEach((item) => {
+    const el = document.createElement("div");
+    el.className = "hist-item";
+    el.title = item.prompt;
+    const when = new Date(item.ts).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    el.innerHTML = `
+      <img class="thumb-img" src="${item.thumb}" alt="" />
+      <div class="info">
+        <div class="prompt">${escapeHtml(item.prompt)}</div>
+        <div class="sub">
+          <span>${escapeHtml(item.model)}</span>
+          <span>${item.time}s · ${when}</span>
+        </div>
+      </div>
+      <button class="del" title="remover">×</button>
+    `;
+    el.onclick = (e) => {
+      if (e.target.classList.contains("del")) {
+        const next = loadHistory().filter((x) => x.id !== item.id);
+        saveHistory(next);
+        fullCache.delete(item.id);
+        renderHistory();
+        return;
+      }
+      showFromHistory(item);
+    };
+    wrap.appendChild(el);
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+function showFromHistory(item) {
+  const result = $("result");
+  const src = fullCache.get(item.id) || item.thumb;
+  const note = fullCache.has(item.id) ? "" : " (sessão anterior — thumb)";
+  result.className = "result";
+  result.innerHTML = `<img src="${src}" alt="resultado" />`;
+  $("meta-model").textContent = `modelo: ${item.model}${note}`;
+  $("meta-time").textContent = `tempo: ${item.time}s`;
+  $("meta-gpu").textContent = "";
+  const dl = $("download");
+  dl.href = src;
+  dl.download = `inemaimg-${item.id}.${fullCache.has(item.id) ? "png" : "jpg"}`;
+  dl.style.display = "inline";
+  // Also restore prompt/params into the form so you can tweak & regenerate
+  $("prompt").value = item.prompt;
+  $("model").value = item.model;
+  if (item.steps) $("steps").value = item.steps;
+  if (item.seed != null) $("seed").value = item.seed;
+}
+
+async function pushHistory(entry, fullDataUrl) {
+  try {
+    entry.thumb = await makeThumb(fullDataUrl);
+  } catch {
+    entry.thumb = fullDataUrl; // fallback
+  }
+  fullCache.set(entry.id, fullDataUrl);
+  const h = loadHistory();
+  h.unshift(entry);
+  if (h.length > HISTORY_MAX) h.length = HISTORY_MAX;
+  saveHistory(h);
+  renderHistory();
+}
+
+// Timer that ticks while a generation is in flight.
+let timerId = null;
+function startTimer(el) {
+  const t0 = performance.now();
+  const tick = () => {
+    const dt = (performance.now() - t0) / 1000;
+    const mm = Math.floor(dt / 60);
+    const ss = (dt - mm * 60).toFixed(1);
+    el.textContent = mm > 0 ? `${mm}:${ss.padStart(4, "0")}` : `${ss}s`;
+  };
+  tick();
+  timerId = setInterval(tick, 100);
+  return () => {
+    clearInterval(timerId); timerId = null;
+    return (performance.now() - t0) / 1000;
+  };
+}
 
 async function refreshHealth() {
   try {
@@ -239,15 +412,24 @@ $("go").onclick = async () => {
   if (!prompt) { errBox.style.display = "block"; errBox.textContent = "prompt vazio"; return; }
   errBox.style.display = "none";
   btn.disabled = true; btn.textContent = "gerando…";
-  result.className = "result"; result.innerHTML = '<div class="spinner"></div>';
+  result.className = "result";
+  result.innerHTML = `
+    <div class="busy">
+      <div class="spinner"></div>
+      <div class="elapsed" id="elapsed">0.0s</div>
+      <div class="elapsed-hint">gerando…</div>
+    </div>`;
   $("meta-model").textContent = ""; $("meta-time").textContent = "";
   $("meta-gpu").textContent = ""; $("download").style.display = "none";
 
+  const stopTimer = startTimer($("elapsed"));
+
   const seed = $("seed").value;
+  const steps = parseInt($("steps").value, 10) || undefined;
   const body = {
     model: $("model").value,
     prompt,
-    steps: parseInt($("steps").value, 10) || undefined,
+    steps,
     true_cfg_scale: parseFloat($("cfg").value) || undefined,
     seed: seed === "" ? undefined : parseInt(seed, 10),
     images: state.images.length ? state.images.map((i) => i.b64) : undefined,
@@ -260,16 +442,31 @@ $("go").onclick = async () => {
       body: JSON.stringify(body),
     });
     const j = await r.json();
+    const wallS = stopTimer();
     if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
     const dataUrl = `data:image/png;base64,${j.image}`;
     result.innerHTML = `<img src="${dataUrl}" alt="resultado" />`;
     $("meta-model").textContent = `modelo: ${j.model_used}`;
-    $("meta-time").textContent = `tempo: ${j.generation_time_s}s`;
+    $("meta-time").textContent = `server: ${j.generation_time_s}s · wall: ${wallS.toFixed(1)}s`;
     $("meta-gpu").textContent = `VRAM: ${j.gpu_memory_allocated_gb} GB`;
     const dl = $("download");
-    dl.href = dataUrl; dl.style.display = "inline";
+    dl.href = dataUrl;
+    dl.download = `inemaimg-${Date.now()}.png`;
+    dl.style.display = "inline";
     refreshHealth();
+
+    // Persist in history (thumb only, full image kept in-memory)
+    await pushHistory({
+      id: String(Date.now()) + "-" + Math.random().toString(36).slice(2, 7),
+      ts: Date.now(),
+      model: j.model_used,
+      prompt,
+      steps,
+      seed: body.seed ?? null,
+      time: j.generation_time_s,
+    }, dataUrl);
   } catch (e) {
+    if (timerId) stopTimer();
     result.className = "result empty"; result.textContent = "falhou";
     errBox.style.display = "block"; errBox.textContent = e.message;
   } finally {
@@ -277,9 +474,17 @@ $("go").onclick = async () => {
   }
 };
 
+$("clear-history").onclick = () => {
+  if (!confirm("Apagar todo o histórico?")) return;
+  localStorage.removeItem(HISTORY_KEY);
+  fullCache.clear();
+  renderHistory();
+};
+
 // Boot
 loadModels();
 refreshHealth();
+renderHistory();
 setInterval(refreshHealth, 4000);
 </script>
 </body>
