@@ -22,6 +22,7 @@ RUN pip install --upgrade pip \
 # App code
 COPY server.py /app/server.py
 COPY loaders /app/loaders
+COPY web /app/web
 
 EXPOSE 8000
 

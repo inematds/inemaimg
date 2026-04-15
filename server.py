@@ -21,6 +21,7 @@ from typing import Any
 
 import torch
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -112,6 +113,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="inemaimg", version="0.1.0", lifespan=lifespan)
+
+# Static playground UI at /
+_WEB_INDEX = os.path.join(os.path.dirname(__file__), "web", "index.html")
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    if not os.path.exists(_WEB_INDEX):
+        raise HTTPException(status_code=404, detail="playground UI not bundled")
+    return FileResponse(_WEB_INDEX)
 
 
 # --------------------------------------------------------------------------- #
