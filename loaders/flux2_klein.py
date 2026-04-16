@@ -1,13 +1,22 @@
 """Loader for black-forest-labs/FLUX.2-klein-9B.
 
-Step-distilled rectified-flow transformer (9B params). Generates in 4 steps,
-supports both text-to-image and edit (single or multi-reference). We also
-wire in FLUX.2-small-decoder (Apache 2.0) because it's strictly better than
-the default decoder — ~1.4x faster at zero quality cost.
+Step-distilled rectified-flow transformer (9B params, text encoder Qwen3 8B).
+Generates in 4 steps, supports both text-to-image and edit with up to 4
+reference images. We wire in FLUX.2-small-decoder (Apache 2.0) for ~1.4x
+faster VAE decode at zero quality cost.
 
-WARNING: FLUX.2 models are FLUX Non-Commercial license. Keep this model
-disabled in REGISTRY if the deployment is part of a commercial product
-without a BFL agreement.
+Per BFL's official docs:
+- guidance_scale is IGNORED by the distilled checkpoint — always set to 1.0.
+- negative_prompt is NOT supported by the FLUX.2 pipeline architecture.
+- Prompt style: prose ("describe like a novelist"), not keyword lists.
+  Quality boosters like "masterpiece", "8k" have no effect.
+- caption_upsample_temperature=0.15 improves short prompts automatically.
+- Resolutions: 128–2048px in 16px increments, baseline 1024².
+
+See docs/flux2-klein.md for the full prompting and parameter guide.
+
+WARNING: FLUX Non-Commercial license. Disable in REGISTRY for commercial
+deployments without a BFL agreement.
 """
 from __future__ import annotations
 
@@ -26,13 +35,12 @@ class Flux2KleinLoader:
     DECODER_ID = "black-forest-labs/FLUX.2-small-decoder"
 
     DEFAULT_STEPS = 4
-    DEFAULT_GUIDANCE = 1.0  # klein is step-distilled, guidance is fixed
     DEFAULT_WIDTH = 1024
     DEFAULT_HEIGHT = 1024
+    MAX_IMAGES = 4
 
     @classmethod
     def load(cls):
-        # Swap in the small VAE decoder — strictly faster, same quality.
         vae = AutoencoderKLFlux2.from_pretrained(
             cls.DECODER_ID,
             torch_dtype=torch.bfloat16,
@@ -51,28 +59,34 @@ class Flux2KleinLoader:
         req: "GenerateRequest",
         images: list[Image.Image],
     ) -> Image.Image:
-        if len(images) > 3:
-            raise ValueError("flux2-klein accepts at most 3 reference images.")
+        if len(images) > cls.MAX_IMAGES:
+            raise ValueError(
+                f"flux2-klein accepts at most {cls.MAX_IMAGES} reference images."
+            )
 
         generator = None
         if req.seed is not None:
             generator = torch.Generator(device="cuda").manual_seed(int(req.seed))
 
+        width = int(req.width) if req.width is not None else cls.DEFAULT_WIDTH
+        height = int(req.height) if req.height is not None else cls.DEFAULT_HEIGHT
+        width = max(128, min(2048, (width // 16) * 16))
+        height = max(128, min(2048, (height // 16) * 16))
+
         kwargs: dict = dict(
             prompt=req.prompt,
-            width=int(req.width) if req.width is not None else cls.DEFAULT_WIDTH,
-            height=int(req.height) if req.height is not None else cls.DEFAULT_HEIGHT,
+            width=width,
+            height=height,
             num_inference_steps=req.steps if req.steps is not None else cls.DEFAULT_STEPS,
-            guidance_scale=cls.DEFAULT_GUIDANCE,  # klein ignores caller override
+            guidance_scale=1.0,
+            caption_upsample_temperature=0.15,
         )
         if images:
-            # FLUX.2 takes a single image or a list — the diffusers wrapper
-            # accepts both shapes.
             kwargs["image"] = images if len(images) > 1 else images[0]
-        if req.negative_prompt is not None:
-            kwargs["negative_prompt"] = req.negative_prompt
         if generator is not None:
             kwargs["generator"] = generator
+        # negative_prompt intentionally NOT passed — FLUX.2 pipeline
+        # does not support it and would raise.
 
         result = pipe(**kwargs)
         return result.images[0]

@@ -63,6 +63,7 @@ Mais contexto:
 - Visão, decisões de arquitetura, roadmap → [`PROJETO.md`](./PROJETO.md)
 - Comparação técnica dos modelos, VRAM, licenças → [`MODELOS.md`](./MODELOS.md)
 - Histórico de integração com o timesmkt3 → [`timesmkt3.md`](./timesmkt3.md)
+- Guia de prompting + parâmetros do FLUX.2-klein → [`docs/flux2-klein.md`](./docs/flux2-klein.md)
 
 ## Instalação
 
@@ -345,7 +346,7 @@ Retorna:
 |---|---|---|---|
 | `qwen-edit-2511` | Edição + multi-imagem | Apache 2.0 | Motor principal. Exige 1–3 imagens de referência. |
 | `ernie` | Text-to-image puro | Aberta | Rejeita `images`. |
-| `flux2-klein` | T2I + edição, 4 steps | FLUX **Non-Commercial** | Gated no HF (aprovação quase instantânea). |
+| `flux2-klein` | T2I + edição, 4 steps | FLUX **Non-Commercial** | Até 4 ref images. `guidance_scale` ignorado (fixo 1.0). Sem `negative_prompt`. [Guia completo](./docs/flux2-klein.md). |
 | `flux2-dev` | T2I premium, 4-bit | FLUX **Non-Commercial** | Usa `diffusers/FLUX.2-dev-bnb-4bit`. Gated. |
 
 > **Aviso de licença:** `flux2-klein` e `flux2-dev` são FLUX Non-Commercial.
