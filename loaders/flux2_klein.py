@@ -79,8 +79,16 @@ class Flux2KleinLoader:
             height=height,
             num_inference_steps=req.steps if req.steps is not None else cls.DEFAULT_STEPS,
             guidance_scale=1.0,
-            caption_upsample_temperature=0.15,
         )
+        # caption_upsample_temperature improves short prompts but is only
+        # available in recent diffusers builds. Try it, skip if unsupported.
+        try:
+            import inspect
+            sig = inspect.signature(pipe.__class__.__call__)
+            if "caption_upsample_temperature" in sig.parameters:
+                kwargs["caption_upsample_temperature"] = 0.15
+        except Exception:
+            pass
         if images:
             kwargs["image"] = images if len(images) > 1 else images[0]
         if generator is not None:
