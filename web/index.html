@@ -120,6 +120,19 @@
     font-size: 12px; line-height: 1; cursor: pointer; opacity: 0; transition: .15s; padding: 0; }
   .hist-item:hover .del { opacity: 1; }
   .history-empty { color: var(--muted); font-size: 12px; padding: 20px 0; text-align: center; }
+
+  /* Size presets */
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .preset { background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 8px; padding: 6px 10px; font-size: 11px; cursor: pointer;
+    font-family: inherit; }
+  .preset:hover { color: var(--text); border-color: var(--accent); }
+  .preset.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  /* Model hint line */
+  .model-hint { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.4; }
+  .model-hint b { color: var(--text); font-weight: 500; }
 </style>
 </head>
 <body>
@@ -137,6 +150,7 @@
         <div>
           <label for="model">Modelo</label>
           <select id="model"></select>
+          <div id="model-hint" class="model-hint"></div>
         </div>
 
         <div>
@@ -151,13 +165,35 @@
           <div id="thumbs" class="thumbs"></div>
         </div>
 
+        <div>
+          <label>Tamanho</label>
+          <div class="presets" id="presets">
+            <button type="button" class="preset" data-w="384"  data-h="384">384²</button>
+            <button type="button" class="preset" data-w="512"  data-h="512">512²</button>
+            <button type="button" class="preset" data-w="768"  data-h="768">768²</button>
+            <button type="button" class="preset" data-w="1024" data-h="1024">1024²</button>
+            <button type="button" class="preset" data-w="1024" data-h="1536">9:16</button>
+            <button type="button" class="preset" data-w="1536" data-h="1024">16:9</button>
+          </div>
+          <div class="row-2">
+            <div>
+              <label for="width" class="hint">width</label>
+              <input id="width" type="number" value="1024" min="128" max="2048" step="64" />
+            </div>
+            <div>
+              <label for="height" class="hint">height</label>
+              <input id="height" type="number" value="1024" min="128" max="2048" step="64" />
+            </div>
+          </div>
+        </div>
+
         <div class="row">
           <div>
             <label for="steps">Steps</label>
             <input id="steps" type="number" value="40" min="1" max="150" />
           </div>
           <div>
-            <label for="cfg">true_cfg_scale</label>
+            <label for="cfg">cfg / guidance</label>
             <input id="cfg" type="number" value="4" step="0.1" />
           </div>
           <div>
@@ -196,6 +232,44 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const state = { images: [] }; // {name, b64, dataUrl}
+
+// Per-model sane defaults and perf hints. Applied when the user picks a model.
+const MODEL_DEFAULTS = {
+  "qwen-edit-2511": {
+    steps: 40, cfg: 4.0, width: 1024, height: 1024,
+    hint: "edição multi-imagem · 40 steps padrão · <b>pesado</b> (~3–4 min / 1024²)",
+  },
+  "ernie": {
+    steps: 50, cfg: 4.0, width: 1024, height: 1024,
+    hint: "text-to-image puro · rejeita imagens de referência · ~2–3 min / 1024²",
+  },
+  "flux2-klein": {
+    steps: 4, cfg: 1.0, width: 1024, height: 1024,
+    hint: "step-distilled · <b>4 steps fixos</b> · non-commercial · o mais rápido",
+  },
+  "flux2-dev": {
+    steps: 28, cfg: 4.0, width: 1024, height: 1024,
+    hint: "premium 4-bit · 28 steps padrão · non-commercial",
+  },
+};
+
+function applyModelDefaults(id) {
+  const d = MODEL_DEFAULTS[id]; if (!d) return;
+  $("steps").value = d.steps;
+  $("cfg").value = d.cfg;
+  $("width").value = d.width;
+  $("height").value = d.height;
+  $("model-hint").innerHTML = d.hint;
+  syncPresets();
+}
+
+function syncPresets() {
+  const w = parseInt($("width").value, 10), h = parseInt($("height").value, 10);
+  document.querySelectorAll(".preset").forEach((btn) => {
+    const match = parseInt(btn.dataset.w, 10) === w && parseInt(btn.dataset.h, 10) === h;
+    btn.classList.toggle("active", match);
+  });
+}
 
 // History: thumbs + metadata persisted in localStorage; full-res images
 // only kept for the current session so we don't blow the 5MB quota.
@@ -368,6 +442,7 @@ async function loadModels() {
       if (m === j.loaded) opt.selected = true;
       sel.appendChild(opt);
     }
+    applyModelDefaults(sel.value);
   } catch (e) { /* handled by health */ }
 }
 
@@ -426,14 +501,25 @@ $("go").onclick = async () => {
 
   const seed = $("seed").value;
   const steps = parseInt($("steps").value, 10) || undefined;
+  const width = parseInt($("width").value, 10) || undefined;
+  const height = parseInt($("height").value, 10) || undefined;
+  const cfg = parseFloat($("cfg").value);
+  const model = $("model").value;
+  // Qwen's "cfg" dial is true_cfg_scale (guidance_scale is fixed at 1.0).
+  // Everything else (FLUX, ERNIE) uses guidance_scale.
   const body = {
-    model: $("model").value,
+    model,
     prompt,
     steps,
-    true_cfg_scale: parseFloat($("cfg").value) || undefined,
+    width,
+    height,
     seed: seed === "" ? undefined : parseInt(seed, 10),
     images: state.images.length ? state.images.map((i) => i.b64) : undefined,
   };
+  if (Number.isFinite(cfg)) {
+    if (model === "qwen-edit-2511") body.true_cfg_scale = cfg;
+    else body.guidance_scale = cfg;
+  }
 
   try {
     const r = await fetch("/generate", {
@@ -480,6 +566,20 @@ $("clear-history").onclick = () => {
   fullCache.clear();
   renderHistory();
 };
+
+// Size presets
+document.querySelectorAll(".preset").forEach((btn) => {
+  btn.onclick = () => {
+    $("width").value = btn.dataset.w;
+    $("height").value = btn.dataset.h;
+    syncPresets();
+  };
+});
+$("width").oninput = syncPresets;
+$("height").oninput = syncPresets;
+
+// When model changes, snap to its sensible defaults
+$("model").addEventListener("change", (e) => applyModelDefaults(e.target.value));
 
 // Boot
 loadModels();

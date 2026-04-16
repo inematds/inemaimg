@@ -95,6 +95,88 @@ Retorna:
 > Se o inemaimg for embutido num produto comercial sem acordo com a BFL,
 > remova-os do `REGISTRY` em `server.py` antes do deploy.
 
+## Consumindo de um cliente Node (timesmkt3)
+
+O inemaimg foi desenhado pra ser consumido como uma API HTTP qualquer. No
+timesmkt3 (`~/projetos/timesmkt3`) ele já está wireado como um "provider"
+no mesmo padrão dos outros (kie, pollinations, piramyd), com drop-in zero
+nos call-sites da pipeline.
+
+### Arquivos tocados no timesmkt3
+
+- `pipeline/generate-image-inemaimg.js` — provider novo. Exporta
+  `generateImage(outputPath, prompt, model, aspectRatio)`, `AVAILABLE_MODELS`,
+  `DEFAULT_MODEL`, `BASE_URL` e `getHealth`. Modo CLI incluso.
+- `pipeline/worker.js` — adicionados o `require('./generate-image-inemaimg')`
+  e a branch `if (p === 'inemaimg') return inemaimgProvider;` dentro de
+  `getImageProvider()`.
+
+Qualquer módulo da pipeline que use o dispatcher
+(`worker.js`, `worker-video.js`, `worker-ad-creative.js`, `worker-video-pro.js`)
+passa a falar com o inemaimg automaticamente quando a env abaixo estiver
+setada — zero mudança nos call-sites.
+
+### Variáveis de ambiente (no `.env` do timesmkt3)
+
+```bash
+IMAGE_PROVIDER=inemaimg                   # ativa o dispatcher
+INEMAIMG_URL=http://localhost:8000        # ou http://<ip-do-servidor>:8000
+INEMAIMG_MODEL=flux2-klein                # default; também: qwen-edit-2511, ernie, flux2-dev
+INEMAIMG_QUALITY=fast                     # fast (padrão) | high
+# INEMAIMG_TIMEOUT_S=1800                 # opcional; 30 min cobre cold starts
+```
+
+### Perfis `fast` vs `high`
+
+| Modelo | `fast` | `high` |
+|---|---|---|
+| `flux2-klein` | 4 steps, 512² | 4 steps, 1024² |
+| `qwen-edit-2511` | 15 steps, 512² | 40 steps, 1024² |
+| `ernie` | 20 steps, 512² | 50 steps, 1024² |
+| `flux2-dev` | 10 steps, 512² | 28 steps, 1024² |
+
+`fast` é pra iterar rápido durante dev; `high` é pra renders finais. Trocar
+o perfil é só mudar a env — não requer rebuild nem restart do timesmkt3.
+
+### Smoke test direto pela CLI (antes de rodar a pipeline)
+
+```bash
+cd ~/projetos/timesmkt3
+node pipeline/generate-image-inemaimg.js /tmp/teste.png "prompt aqui" flux2-klein 1:1
+```
+
+O CLI bate primeiro no `/health` pra te dar um status (modelo carregado,
+`prewarm_status`, VRAM) e só então dispara `/generate`. Se o `flux2-klein`
+ainda não terminou de baixar, passa `qwen-edit-2511` no lugar — ele é o
+modelo pré-aquecido pelo `INEMAIMG_PREWARM` do `docker-compose.yml`.
+
+### Modelos gated
+
+`flux2-klein` e `flux2-dev` são gated no HF. O token tem que estar
+disponível **no container do inemaimg** (não no timesmkt3 — o timesmkt3 só
+fala HTTP com o inemaimg, não baixa pesos). Ver a seção abaixo sobre
+`HF_TOKEN`.
+
+### Integração programática (fora do CLI)
+
+```js
+const inemaimg = require('./pipeline/generate-image-inemaimg');
+
+// Health check antes de um batch pesado
+const health = await inemaimg.getHealth();
+if (health.prewarm_status !== 'ready') {
+  // modelo ainda carregando — esperar ou cair num fallback
+}
+
+// Uma geração
+await inemaimg.generateImage(
+  '/path/out.png',
+  'a cyberpunk cat in a neon alley',
+  'flux2-klein',
+  '16:9',
+);
+```
+
 ## Acesso a modelos gated (FLUX.2)
 
 Os modelos FLUX.2 exigem aprovação no HuggingFace antes de baixar:
