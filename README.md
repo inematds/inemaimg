@@ -1,25 +1,282 @@
 # inemaimg
 
-Servidor local de geração/edição de imagens com hot-swap entre múltiplos
-modelos, exposto via FastAPI. Roda em Docker com acesso à GPU e é consumido
-pelo timesmkt3 como se fosse uma API externa de imagens.
+> Servidor local multi-modelo de **geração e edição de imagens** com
+> hot-swap entre Qwen-Edit, FLUX.2 e ERNIE, exposto como API HTTP e
+> playground web. Roda em Docker no DGX Spark (GB10), consumido pelo
+> [timesmkt3](https://github.com/inematds/timesmkt3) como drop-in de
+> provider de imagens.
 
-Visão e decisões de arquitetura → [`PROJETO.md`](./PROJETO.md)
-Comparação técnica dos modelos → [`MODELOS.md`](./MODELOS.md)
+![status](https://img.shields.io/badge/status-MVP-ff9f43) ![licença](https://img.shields.io/badge/licen%C3%A7a-projeto_interno-lightgrey) ![pytorch](https://img.shields.io/badge/pytorch-2.11%20(NGC%2026.03)-ee4c2c) ![gpu](https://img.shields.io/badge/gpu-Blackwell%20GB10-76b900)
 
-## Requisitos
+## Sobre o projeto
 
-- NVIDIA Container Toolkit + driver compatível com CUDA 12.8+
-- GPU com suporte a Blackwell / sm_120 (alvo: DGX Spark / GB10, 119 GB unificados)
-  ou qualquer GPU com ≥ 24 GB de VRAM discreta
-- Docker Compose v2
-- Cache de modelos do HuggingFace em `~/.cache/huggingface` (volume montado)
+O **inemaimg** nasceu de uma necessidade concreta do timesmkt3: tínhamos
+que gerar centenas de imagens por semana pra campanhas de marketing,
+pagando por chamadas em APIs como Kie.ai, Pollinations e OpenAI —
+cada uma com licenças, preços e limites de rate diferentes. Com a
+chegada do **DGX Spark (GB10 Grace-Blackwell Superchip)** com 119 GB
+de memória unificada, ficou inviável *não* rodar tudo local.
 
-## Subir o serviço
+O servidor resolve três problemas de uma vez:
+
+1. **Multi-modelo sob demanda** — uma mesma API expõe 4 modelos de
+   imagem com perfis complementares (velocidade, qualidade, licença
+   comercial) e troca entre eles em memória conforme a requisição.
+2. **Licenciamento claro** — Qwen-Edit-2511 (Apache 2.0) e ERNIE
+   (aberta) pra uso comercial; FLUX.2-klein e FLUX.2-dev (non-commercial)
+   pra iteração rápida e render premium durante o dev.
+3. **Drop-in pra o timesmkt3** — um `generateImage(outputPath, prompt,
+   model, aspect)` que substitui qualquer outro provider sem mexer
+   nos call-sites.
+
+**Stack:** Python 3.12 + FastAPI + diffusers (git main) + PyTorch 2.11
+(NGC `26.03-py3` arm64-sbsa) + Docker Compose.
+
+**Arquitetura resumida:**
+
+```
+   timesmkt3 / curl / browser
+            │
+            ▼
+  ┌───────────────────┐
+  │  FastAPI gateway  │  → /health /models /generate
+  │  asyncio.Lock GPU │
+  └─────────┬─────────┘
+            │  (hot swap quando o modelo pedido != carregado)
+            ▼
+  ┌───────────────────┐
+  │  Model Registry   │
+  │  qwen-edit-2511   │  ← Apache 2.0, motor principal (prewarm)
+  │  flux2-klein      │  ← non-commercial, 4 steps, o mais rápido
+  │  ernie            │  ← aberta, T2I puro
+  │  flux2-dev        │  ← non-commercial, 4-bit, premium
+  └─────────┬─────────┘
+            ▼
+  ┌───────────────────┐
+  │  NVIDIA GB10      │  119 GB memória unificada, sm_120
+  │  1 modelo quente  │  (registry é trivialmente extensível
+  │                   │   pra multi-hot no futuro)
+  └───────────────────┘
+```
+
+Mais contexto:
+- Visão, decisões de arquitetura, roadmap → [`PROJETO.md`](./PROJETO.md)
+- Comparação técnica dos modelos, VRAM, licenças → [`MODELOS.md`](./MODELOS.md)
+- Histórico de integração com o timesmkt3 → [`timesmkt3.md`](./timesmkt3.md)
+
+## Instalação
+
+### 1. Requisitos de hardware e sistema
+
+| Item | Alvo deste projeto | Mínimo pra rodar |
+|---|---|---|
+| GPU | NVIDIA GB10 (Blackwell, sm_120) | qualquer GPU com ≥ 24 GB VRAM |
+| Arquitetura | arm64-sbsa (NGC 26.03 tem build oficial) | x86_64 também funciona, mas precisa swapar a base image pro build amd64 correspondente |
+| RAM | 119 GB unificada (GB10) | 32 GB + 24 GB VRAM discreta |
+| Disco | ~100 GB livres em `~/.cache/huggingface` | ~50 GB mínimo (só Qwen-Edit + FLUX.2-klein) |
+| Driver NVIDIA | 580.x+ (CUDA 13) | 550.x+ (CUDA 12.4) |
+| Docker | Compose v2 + NVIDIA Container Toolkit ou CDI | idem |
+| SO | Linux (testado em Ubuntu 24.04 kernel 6.14 NVIDIA) | qualquer Linux com suporte ao nvidia runtime |
+
+> **Nota sobre Blackwell / sm_120:** o PyTorch 2.7 do NGC `25.03-py3`
+> tinha kernels ausentes pra várias operações em sm_120 e caía em
+> fallbacks lentos (uma geração de 4 steps demorava ~290s). O bump
+> pro NGC `26.03-py3` (PyTorch 2.11) resolveu isso — mesma geração
+> agora roda em ~31s. Se você for reimplantar noutra base image,
+> valide com um smoke test antes e leia `loaders/_blackwell_shims.py`
+> pra entender o workaround do `nvrtc` que ainda está ativo.
+
+### 2. Pré-requisitos no host
+
+```bash
+# Verificar GPU + driver
+nvidia-smi
+
+# Verificar Docker com acesso a GPU (NVIDIA Container Toolkit)
+docker run --rm --gpus all nvcr.io/nvidia/pytorch:26.03-py3 nvidia-smi
+# Se esse comando retornar um nvidia-smi válido, a stack do host está OK.
+
+# Verificar espaço livre pro cache de modelos
+df -h ~/.cache/huggingface || df -h $HOME
+```
+
+Se o segundo comando falhar com erro de runtime, instale o
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+antes de continuar.
+
+### 3. Clonar e entrar no diretório
+
+```bash
+git clone git@github.com:inematds/inemaimg.git
+cd inemaimg
+```
+
+Estrutura que você vai ver:
+
+```
+inemaimg/
+├── server.py                  # FastAPI + registry + asyncio lock
+├── loaders/
+│   ├── _blackwell_shims.py    # workaround de nvrtc pra sm_120
+│   ├── qwen_edit.py           # motor principal (Apache 2.0)
+│   ├── ernie.py               # text-to-image aberto
+│   ├── flux2_klein.py         # T2I + edit, 4 steps (non-commercial)
+│   └── flux2_dev.py           # T2I premium 4-bit (non-commercial)
+├── web/index.html             # playground servido em /
+├── Dockerfile                 # base NGC 26.03-py3 arm64-sbsa
+├── docker-compose.yml
+├── requirements.txt
+├── PROJETO.md  MODELOS.md  timesmkt3.md  README.md
+```
+
+### 4. Autenticar no HuggingFace (obrigatório pros modelos gated)
+
+FLUX.2-klein e FLUX.2-dev são gated — exigem aprovação na página do
+modelo **e** um token HF exportado pro container. Ver a seção
+[Acesso a modelos gated (FLUX.2)](#acesso-a-modelos-gated-flux2) abaixo
+pro passo-a-passo completo. Se você só vai usar `qwen-edit-2511` ou
+`ernie`, **pule essa etapa**: eles são públicos.
+
+Jeito rápido, assumindo que você já aprovou os gates e já rodou
+`huggingface-cli login` no host:
+
+```bash
+export HF_TOKEN=$(cat ~/.cache/huggingface/token)
+```
+
+O `docker-compose.yml` já faz `HF_TOKEN=${HF_TOKEN:-}`, então qualquer
+valor exportado no shell é passado pro container. Se a variável não
+estiver setada, só os modelos públicos carregam.
+
+### 5. Primeiro boot (build + download dos pesos)
+
+```bash
+docker compose up -d --build
+docker compose logs -f
+```
+
+O que acontece internamente:
+
+1. **Build da imagem** (~10 min na primeira vez, 2–3 min nas seguintes).
+   A base NGC `26.03-py3` arm64-sbsa tem ~20 GB — o pull ocupa mais
+   tempo que o build em si.
+2. **Prewarm assíncrono do Qwen-Edit-2511** (`INEMAIMG_PREWARM=qwen-edit-2511`
+   no compose). Na primeira subida, baixa **~40 GB de pesos** via
+   hf_transfer. Em uma conexão típica residencial isso leva **~10–20 min**;
+   em fibra empresarial, ~5 min. Os modelos ficam cacheados em
+   `~/.cache/huggingface` (volume montado), então boots seguintes não
+   re-baixam nada — só carregam pra VRAM em ~4 min.
+3. **`/health` responde imediatamente** mesmo durante o download — o
+   prewarm roda em task separada. Você pode pollar o campo
+   `prewarm_status` até ele virar `ready`:
+
+```bash
+# Em outro terminal enquanto o boot acontece:
+watch -n 2 'curl -s localhost:8000/health | python3 -m json.tool'
+```
+
+Estados possíveis do `prewarm_status`:
+- `running` → download ou load em andamento, esperar
+- `ready` → primeira geração vai rodar na hora
+- `failed` → olhar `prewarm_error` no JSON e `docker compose logs inemaimg`
+
+### 6. Verificar que está tudo funcionando
+
+```bash
+# 1. Health check
+curl -s localhost:8000/health | python3 -m json.tool
+# Deve retornar prewarm_status: ready e gpu_memory_allocated_gb > 0
+
+# 2. Listar modelos
+curl -s localhost:8000/models | python3 -m json.tool
+
+# 3. Playground no browser
+#    Abra: http://localhost:8000/  (ou o IP do host na LAN)
+```
+
+Na UI você vai ver:
+- Badge verde "pronto — qwen-edit-2511 · 53.79 GB" no canto superior direito
+- Select com os 4 modelos disponíveis
+- Controles de prompt, tamanho, steps, cfg, seed
+- Histórico persistente das suas gerações
+
+### 7. Smoke test real (opcional mas recomendado)
+
+Dispara uma geração simples de 4 steps no Qwen-Edit pra confirmar que
+a GPU tá processando de verdade:
+
+```bash
+python3 - <<'PY'
+import base64, io, json, urllib.request
+from PIL import Image, ImageDraw
+
+img = Image.new("RGB", (384, 384), (40, 60, 130))
+ImageDraw.Draw(img).rectangle([96, 96, 288, 288], fill=(220, 180, 40))
+buf = io.BytesIO(); img.save(buf, format="PNG")
+b64 = base64.b64encode(buf.getvalue()).decode()
+
+req = urllib.request.Request(
+    "http://localhost:8000/generate",
+    data=json.dumps({
+        "model": "qwen-edit-2511",
+        "prompt": "change the yellow square into a red circle",
+        "images": [b64],
+        "steps": 4,
+        "seed": 42,
+    }).encode(),
+    headers={"content-type": "application/json"},
+)
+with urllib.request.urlopen(req, timeout=900) as r:
+    j = json.loads(r.read())
+    print(f"OK: {j['generation_time_s']}s on {j['model_used']}, vram {j['gpu_memory_allocated_gb']} GB")
+    with open("/tmp/inemaimg_smoke.png", "wb") as f:
+        f.write(base64.b64decode(j["image"]))
+print("saved /tmp/inemaimg_smoke.png")
+PY
+```
+
+Tempos esperados no GB10:
+- **4 steps em 384²**: ~30s (primeira vez, ~31s; subsequentes, ~25s)
+- **40 steps em 1024²** (recomendado do Qwen): ~3–4 min
+- **4 steps em 512²** no FLUX.2-klein: alguns segundos (depois que
+  terminar de baixar os ~35 GB do klein)
+
+### 8. Parar, reiniciar, troubleshoot
+
+```bash
+# Parar
+docker compose down
+
+# Reiniciar preservando o cache HF
+docker compose restart
+
+# Rebuild da imagem (necessário só quando mexe em server.py, loaders/,
+# Dockerfile ou requirements.txt — arquivos em web/ são volume mount
+# e atualizam na hora)
+docker compose up -d --build
+
+# Logs ao vivo
+docker compose logs -f
+
+# Entrar no container pra debugar
+docker compose exec inemaimg bash
+```
+
+Causas comuns de falha no boot:
+
+| Sintoma | Causa provável | Fix |
+|---|---|---|
+| `prewarm_status: failed` | `INEMAIMG_PREWARM` aponta pra um id fora do registry | conferir `server.py:REGISTRY` e corrigir o compose |
+| `403 Forbidden` no download | modelo gated sem `HF_TOKEN` | ver seção [Acesso a modelos gated](#acesso-a-modelos-gated-flux2) |
+| `CUDA out of memory` | outro processo segurou a GPU | `nvidia-smi` → matar processo; ou ajustar `USE_CPU_OFFLOAD=True` no loader |
+| `nvrtc: invalid value for --gpu-architecture` | base image sem kernels pra sm_120 | **não deveria acontecer no 26.03**; se acontecer, o shim em `loaders/_blackwell_shims.py` já cobre o caso conhecido — abrir issue descrevendo a op que falhou |
+| `/health` trava durante geração | versão antiga rodando `pipe()` no event loop | o fix já está no `main` (executor), puxar `git pull && docker compose up -d --build` |
+
+## Subir o serviço (quick reference)
 
 ```bash
 # 1. (primeira vez) exportar token do HF pra repos gated
-export HF_TOKEN=hf_xxx  # ver seção "Acesso a modelos gated" abaixo
+export HF_TOKEN=$(cat ~/.cache/huggingface/token)  # ou hf_xxx direto
 
 # 2. subir
 docker compose up -d --build
