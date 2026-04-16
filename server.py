@@ -56,9 +56,9 @@ REGISTRY: dict[str, type] = {
 
 class _State:
     loaded_id: str | None = None
+    loading_id: str | None = None  # set while _load is in progress
     pipe: Any | None = None
     lock: asyncio.Lock | None = None
-    # Prewarm status, used by /health so orchestrators can tell "booting" from "stuck".
     prewarm_status: str = "idle"  # idle | running | ready | failed
     prewarm_error: str | None = None
 
@@ -72,11 +72,15 @@ def _load(model_id: str) -> None:
         return
     _unload()
     loader_cls = REGISTRY[model_id]
+    state.loading_id = model_id
     log.info("loading model %s (%s)", model_id, loader_cls.__name__)
     t0 = time.perf_counter()
-    state.pipe = loader_cls.load()
-    state.loaded_id = model_id
-    log.info("loaded %s in %.1fs", model_id, time.perf_counter() - t0)
+    try:
+        state.pipe = loader_cls.load()
+        state.loaded_id = model_id
+        log.info("loaded %s in %.1fs", model_id, time.perf_counter() - t0)
+    finally:
+        state.loading_id = None
 
 
 def _unload() -> None:
@@ -196,6 +200,7 @@ def health():
     return {
         "status": "ok",
         "loaded_model": state.loaded_id,
+        "loading_model": state.loading_id,
         "prewarm_status": state.prewarm_status,
         "prewarm_error": state.prewarm_error,
         "gpu_memory_allocated_gb": _gpu_mem_gb(),
