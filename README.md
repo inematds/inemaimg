@@ -64,6 +64,7 @@ Mais contexto:
 - Comparação técnica dos modelos, VRAM, licenças → [`MODELOS.md`](./MODELOS.md)
 - Histórico de integração com o timesmkt3 → [`timesmkt3.md`](./timesmkt3.md)
 - Guia de prompting + parâmetros do FLUX.2-klein → [`docs/flux2-klein.md`](./docs/flux2-klein.md)
+- Comparativo de qualidade, steps e fluxo recomendado → [`docs/comparativo-modelos.md`](./docs/comparativo-modelos.md)
 
 ## Instalação
 
@@ -352,6 +353,29 @@ Retorna:
 > **Aviso de licença:** `flux2-klein` e `flux2-dev` são FLUX Non-Commercial.
 > Se o inemaimg for embutido num produto comercial sem acordo com a BFL,
 > remova-os do `REGISTRY` em `server.py` antes do deploy.
+
+## Qualidade e inference steps
+
+Cada modelo tem um **ponto ótimo de steps** — além dele, você gasta
+tempo sem ganho visível. Detalhes completos em
+[`docs/comparativo-modelos.md`](./docs/comparativo-modelos.md).
+
+| Modelo | Steps recomendado | Mais steps ajuda? | Qualidade relativa |
+|---|---:|---|---|
+| `flux2-dev` | **28** | Sim, até ~28 — marginal depois | Topo absoluto (32B) |
+| `qwen-edit-2511` | **40** | Sim, até ~40 — platô depois | Muito boa (foco em edição/fidelidade) |
+| `flux2-klein` | **4** | **NÃO** — piora acima de 4 (step-distilled) | Boa (~85% do dev) |
+| `ernie` | **50** | Sim, até ~50 — platô depois | Competente (8B) |
+
+**Fluxo recomendado:**
+
+```
+iteração de prompt  →  flux2-klein (512², 4 steps)         →  segundos
+validação visual    →  flux2-klein (1024², 4 steps)        →  ~1 min
+render final        →  flux2-dev (1024², 28 steps)         →  ~3 min
+edição com produto  →  qwen-edit-2511 + ref images         →  ~4 min
+produção comercial  →  qwen-edit-2511 ou ernie (licença OK)
+```
 
 ## Consumindo de um cliente Node (timesmkt3)
 

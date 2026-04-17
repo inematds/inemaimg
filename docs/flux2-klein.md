@@ -74,6 +74,7 @@ Exemplo ruim: *"good lighting"*
 | `negative_prompt` | FLUX.2 **não suporta** negative prompt na arquitetura do pipeline |
 | Prompts > 300 palavras | gera conflito interno entre as instruções |
 | Renderizar texto legível na imagem | limitação conhecida — texto sai distorcido frequentemente |
+| `num_inference_steps > 4` | o checkpoint é **step-distilled pra 4** — aumentar steps não melhora e pode **piorar** (a imagem diverge, surgem artefatos). 4 não é um "mínimo", é o ponto ótimo. |
 
 ### Caption upsampling
 
