@@ -75,25 +75,57 @@ dez minutos de preenchimento honesto evitam tentativa-e-erro **paga**.
   literal para o texto ("the sign reads exactly: ABRIL"), diferente do FLUX, onde
   isso não adianta porque a limitação é de renderização.
 
-### Agnes — (não verificado para imagem no pipeline do reel)
+### Agnes — **VERIFICADO em 2026-08-09**
 
-- **O que já existe:** as skills `imagens-agnes` e `videos-agnes`, com custo US$ 0.
-  O cliente delas é a fonte confiável — transcrever de lá para a receita é
-  conhecimento seu, não palpite. **Ainda não transcrito.**
-- **A preencher:** modelo, limites de tamanho, se aceita referência, e o formato da
-  resposta.
+Exercitada de verdade, com chamadas reais, ao implementar o adaptador do
+`gen-imagem.py`. Custo **US$ 0**, ~10 s por imagem.
+
+```
+POST {AGNES_BASE_URL}/images/generations      # a base JÁ inclui /v1 nesta casa
+Authorization: Bearer $AGNES_API_KEY
+{"model":"agnes-image-2.1-flash","prompt":"...","size":"1088x704",
+ "extra_body":{"response_format":"b64_json"}}
+→ {"data":[{"b64_json":"...","url":"...","revised_prompt":"..."}], "usage":{...}}
+```
+
+Quatro coisas que só a chamada real mostrou, e que **contradizem o que se supunha**:
+
+| achado | consequência |
+|---|---|
+| **Prompt em PT funcionou.** A skill `imagens-agnes` diz que português dispara filtro e devolve 400 — não foi o que aconteceu com um prompt comum de cena | não é preciso traduzir os prompts do domínio. Uma amostra não derruba a regra para conteúdo sensível; trate como "PT não é bloqueio automático" |
+| **Não existe seed.** O serviço não aceita e não devolve | **o determinismo do reel cai neste provedor**: mesma `--seed-key` gera imagem diferente a cada render. É escolha do serviço |
+| **O tamanho pedido é sugestão.** Pedimos `1088x736`, veio `1248x832` — proporção respeitada, pixels não | quebraria o reel em silêncio: `preparar.py` compara dimensão para reaproveitar, e o empilhamento espera a faixa exata. O adaptador **normaliza** (corte pelo centro, nunca esticar) |
+| `AGNES_MODEL` do `.env` é o modelo de **chat** | mandar ele devolve `400 ... is a chat model`. O de imagem é `agnes-image-2.1-flash`, em `AGNES_IMAGE_MODEL` |
+
+Erro de percurso que vale registrar: concatenar `/v1` às cegas na base rendeu
+`404 POST /v1/v1/images/generations`. O adaptador testa o sufixo.
+
+Retry com backoff está implementado por causa dos ~34% de 503 que a skill
+`imagens-agnes` documenta — sem isso, um terço dos segmentos do reel nasceria sem
+imagem por azar de momento.
 
 ## O que NÃO é adaptação de prompt
 
 Trocar de provedor **não** é mudar um endereço. `INEMAIMG_HOST` aponta para outro
 inemaimg — não para a kie, fal ou Agnes: corpo do request, autenticação e formato da
-resposta são outros. Isso é **adaptador**, e ele ainda não existe no
-`gen-imagem.py`; o script diz isso no comentário para ninguém tentar o atalho.
+resposta são outros. Isso é **adaptador**.
 
-Numa máquina sem GPU, antes de escrever adaptador, considere o caminho barato:
-túnel para o inemaimg de casa (`ssh -R 8000:localhost:8000 <vps>`) e
-`INEMAIMG_HOST=http://localhost:8000` na VPS. Mesmo modelo, mesmo determinismo,
-custo zero.
+Desde 2026-08-09 ele existe, no `gen-imagem.py` dos repos de domínio:
+
+```bash
+IMG_PROVEDOR=inemaimg   # default — GPU local, custo zero, seed respeitado
+IMG_PROVEDOR=agnes      # API, custo US$ 0, SEM seed
+IMG_ENV_PATH=/root/.config/inemaccbot/imagem.env   # de onde vem a chave
+```
+
+`kie` e `fal` ainda não estão implementados: o script recusa com
+`IMG_PROVEDOR=<x> nao implementado` em vez de fingir. Acrescentar cada um é uma
+função — o difícil não é o código, é exercitar de verdade antes de confiar.
+
+Numa máquina sem GPU há ainda o caminho sem provedor nenhum: túnel para o inemaimg
+de casa (`ssh -R 8000:localhost:8000 <vps>`) com `INEMAIMG_HOST=http://localhost:8000`.
+Mesmo modelo, **mesmo determinismo**, custo zero — é a única opção que preserva a
+promessa de "mesma seed-key, mesma imagem".
 
 ## Como manter isto honesto
 
