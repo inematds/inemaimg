@@ -64,6 +64,7 @@ Mais contexto:
 - Comparação técnica dos modelos, VRAM, licenças → [`MODELOS.md`](./MODELOS.md)
 - Histórico de integração com o timesmkt3 → [`timesmkt3.md`](./timesmkt3.md)
 - Guia de prompting + parâmetros do FLUX.2-klein → [`docs/flux2-klein.md`](./docs/flux2-klein.md)
+- Adaptar o MESMO prompt por provedor/modelo (locais medidos; nuvem marcada como não verificada) → [`docs/prompt-por-provedor.md`](./docs/prompt-por-provedor.md)
 - Comparativo de qualidade, steps e fluxo recomendado → [`docs/comparativo-modelos.md`](./docs/comparativo-modelos.md)
 
 ## Instalação
