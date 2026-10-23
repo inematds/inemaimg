@@ -22,6 +22,11 @@ RUN pip install --upgrade pip \
  && pip install hf_transfer \
  && pip install "git+https://github.com/huggingface/diffusers"
 
+# Segurança (23/10/2026, caso eMudhra): lista de certificados do sistema e certifi
+# sempre atualizados no build — a base fixa (pytorch:26.03) traz certifi antigo.
+RUN apt-get update -qq && apt-get install -y -qq --only-upgrade ca-certificates && apt-get clean \
+ && pip install -U "certifi>=2026.10.19"
+
 # App code
 COPY server.py /app/server.py
 COPY loaders /app/loaders
