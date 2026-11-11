@@ -3,7 +3,9 @@ services:
     build: .
     image: inemaimg:latest
     container_name: inemaimg
-    restart: unless-stopped
+    # Sem religar sozinho: quem liga e desliga é o porteiro (wifi/inemaimg-porteiro),
+    # que fica na porta 8000 e desliga após 10 min sem pedido (11/11/2026).
+    restart: "no"
 
     # GB10 (DGX Spark) — nvidia runtime via NVIDIA Container Toolkit / CDI
     runtime: nvidia
@@ -17,7 +19,12 @@ services:
       # if unset, only public models will load.
       - HF_TOKEN=${HF_TOKEN:-}
       # The model pre-warmed on container start. Empty = no prewarm.
-      - INEMAIMG_PREWARM=qwen-edit-2511
+      - INEMAIMG_PREWARM=flux2-klein
+      # Text-encoder quantization for flux2-klein: int4 | int8 | none.
+      # Cuts the Qwen3-8B text encoder down from ~16 GB. Falls back automatically.
+      - INEMAIMG_TE_QUANT=int8
+      # Descarrega o modelo da GPU após N min sem uso (0 = nunca). O próximo /generate recarrega.
+      - INEMAIMG_IDLE_UNLOAD_MIN=30
 
     volumes:
       # Persist HuggingFace cache so we don't re-download ~40GB every rebuild.
@@ -28,14 +35,19 @@ services:
       # The server reads web/index.html via FileResponse on each request.
       - ./web:/app/web:ro
 
-    # TEMPORARY: exposed on the LAN (0.0.0.0) for cross-machine testing.
-    # There is NO auth on /generate yet — revert to 127.0.0.1:8000:8000 or
-    # add an API key check before leaving this running unattended.
+    # Porta interna. A 8000 (LAN) agora é do porteiro, que liga este contêiner
+    # no primeiro pedido e repassa. Sem auth no /generate (vale o aviso antigo).
     ports:
-      - "0.0.0.0:8000:8000"
+      - "127.0.0.1:8001:8000"
 
     # Pipelines use large shared-memory tensors for dataloader workers.
     shm_size: "8g"
+
+    # Hard memory cap. GB10 unified memory means torch alloc consumes host RAM —
+    # without this, a runaway model load thrashes the box (crashes 2026-05-05 and
+    # 2026-05-07). Watchdog (wifi/inemaimg-watchdog.sh) alerts at 20G; OOM-kill at 30G.
+    mem_limit: "30g"
+    memswap_limit: "30g"
 
     # Healthcheck hits /health — fast, doesn't load the model.
     healthcheck:
